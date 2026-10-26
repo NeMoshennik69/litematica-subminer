@@ -9,13 +9,6 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.block.BlockState;
 import net.minecraft.text.Text;
 
-import baritone.api.BaritoneAPI;
-import baritone.api.IBaritone;
-import baritone.api.pathing.goals.GoalNear;
-
-import fi.dy.masa.litematica.data.DataManager;
-import fi.dy.masa.litematica.schematic.container.SchematicWorld;
-
 public class LitematicaSubterraneanBot {
     private static boolean active = false;
     private static int stepCounter = 0;
@@ -27,9 +20,7 @@ public class LitematicaSubterraneanBot {
 
     public static void toggle() {
         active = !active;
-        IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
         if (!active) {
-            baritone.getPathingBehavior().cancel();
             currentLayerY = -1;
             sendMessage("§c[SubMiner] Выключен");
         } else {
@@ -43,7 +34,6 @@ public class LitematicaSubterraneanBot {
         if (!active || client.player == null || client.world == null) return;
 
         BlockPos currentPos = client.player.getBlockPos();
-        IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
 
         if (lastBlockPos == null) {
             lastBlockPos = currentPos;
@@ -57,64 +47,41 @@ public class LitematicaSubterraneanBot {
             }
         }
 
-        if (baritone.getPathingBehavior().isPathing()) {
-            try {
-                GoalNear goal = (GoalNear) baritone.getCustomGoalProcess().getGoal();
-                if (goal != null && currentPos.isWithinDistance(goal.getGoalPos(), 4.2)) {
-                    autoBreakTarget(client, goal.getGoalPos());
-                }
-            } catch (Exception ignored) {}
-            return;
-        }
-
-        SchematicWorld schematic = DataManager.getSchematicWorld();
-        if (schematic == null) {
-            sendMessage("§c[SubMiner] Ошибка: Голограмма Litematica не найдена!");
-            toggle();
-            return;
-        }
-
         if (currentLayerY == -1) {
             currentLayerY = currentPos.getY() + 3;
         }
 
-        BlockPos targetBlock = findNextBlockInLayer(client, schematic, currentPos, currentLayerY);
+        BlockPos targetBlock = findNextBlockInLayer(client, currentPos, currentLayerY);
 
         if (targetBlock == null) {
             currentLayerY--;
             if (currentLayerY < client.world.getBottomY()) {
-                sendMessage("§6[SubMiner] Готово! Зона полностью очищена до коренной породы.");
+                sendMessage("§6[SubMiner] Готово! Зона полностью очищена.");
                 toggle();
             }
             return;
         }
 
-        baritone.getCustomGoalProcess().setGoalAndPath(new GoalNear(targetBlock, 3));
+        if (currentPos.isWithinDistance(targetBlock, 4.2)) {
+            autoBreakTarget(client, targetBlock);
+        }
     }
 
-    private static BlockPos findNextBlockInLayer(MinecraftClient client, SchematicWorld schematic, BlockPos playerPos, int layerY) {
+    private static BlockPos findNextBlockInLayer(MinecraftClient client, BlockPos playerPos, int layerY) {
         BlockPos.Mutable mutablePos = new BlockPos.Mutable();
-        BlockPos closest = null;
-        double closestDist = Double.MAX_VALUE;
         int radius = 16; 
 
         for (int x = -radius; x <= radius; x++) {
             for (int z = -radius; z <= radius; z++) {
                 mutablePos.set(playerPos.getX() + x, layerY, playerPos.getZ() + z);
-                
                 BlockState worldState = client.world.getBlockState(mutablePos);
-                BlockState schemState = schematic.getBlockState(mutablePos);
 
-                if (!worldState.isAir() && schemState.isAir()) {
-                    double dist = mutablePos.getSquaredDistance(playerPos);
-                    if (dist < closestDist) {
-                        closestDist = dist;
-                        closest = mutablePos.toImmutable(); 
-                    }
+                if (!worldState.isAir() && !worldState.isLiquid()) {
+                    return mutablePos.toImmutable();
                 }
             }
         }
-        return closest;
+        return null;
     }
 
     private static void autoBreakTarget(MinecraftClient client, BlockPos pos) {
