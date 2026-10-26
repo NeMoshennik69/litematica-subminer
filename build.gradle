@@ -17,14 +17,14 @@ dependencies {
     mappings "net.fabricmc.yarn:26.3+build.1:v2"
     modImplementation "net.fabricmc:fabric-loader:0.16.0"
     
-    // Официальные модули Fabric API под версию 26.3
+    // Базовый модуль Fabric API для версии 26.3
     modImplementation "net.fabricmc.fabric-api:fabric-api:0.105.0+26.3"
 
-    // Подключение Litematica и MaLiLib под версию 26.3
+    // Моды-зависимости, переведённые на ID CurseForge
     modImplementation "curse.maven:litematica-308892:5901234"
     modImplementation "curse.maven:malilib-330260:5901230"
     
-    // Встроенный навигатор Baritone API
+    // Вшиваем Baritone напрямую в сборку как библиотеку
     implementation 'com.github.cabaletta:baritone:1.3.0'
 }
 
