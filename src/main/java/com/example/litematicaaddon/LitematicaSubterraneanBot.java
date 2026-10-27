@@ -201,4 +201,149 @@ public final class LitematicaSubterraneanBot {
             BlockPos best = null;
             double bestDist = Double.MAX_VALUE;
             for (int x = minX; x <= maxX; x++) {
-                for (int z = mi
+                for (int z = minZ; z <= maxZ; z++) {
+                    pos.set(x, y, z);
+                    double d = Vec3.atCenterOf(pos).distanceToSqr(eye);
+                    if (d > reachSq || d >= bestDist) {
+                        continue;
+                    }
+                    if (!isMineable(level, pos) || skipped.contains(pos.asLong())) {
+                        continue;
+                    }
+                    best = pos.immutable();
+                    bestDist = d;
+                }
+            }
+            if (best != null) {
+                return best;
+            }
+        }
+        return null;
+    }
+
+    private static BlockPos nearestRemaining(ClientLevel level, Vec3 eye) {
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        for (int y = topY; y >= bottomY; y--) {
+            for (int x = origin.getX() - RADIUS; x <= origin.getX() + RADIUS; x++) {
+                for (int z = origin.getZ() - RADIUS; z <= origin.getZ() + RADIUS; z++) {
+                    pos.set(x, y, z);
+                    double d = Vec3.atCenterOf(pos).distanceToSqr(eye);
+                    if (d >= bestDist) {
+                        continue;
+                    }
+                    if (!isMineable(level, pos) || skipped.contains(pos.asLong())) {
+                        continue;
+                    }
+                    best = pos.immutable();
+                    bestDist = d;
+                }
+            }
+        }
+        return best;
+    }
+
+    private static boolean isStillValid(ClientLevel level, BlockPos pos, Vec3 eye, double reach) {
+        return isMineable(level, pos)
+                && !skipped.contains(pos.asLong())
+                && Vec3.atCenterOf(pos).distanceToSqr(eye) <= reach * reach;
+    }
+
+    private static boolean isMineable(ClientLevel level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        return !state.isAir()
+                && state.getFluidState().isEmpty()
+                && state.getDestroySpeed(level, pos) >= 0.0F;
+    }
+
+    private static boolean isUnsafe(ClientLevel level, BlockPos pos) {
+        for (Direction dir : Direction.values()) {
+            if (!level.getFluidState(pos.relative(dir)).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean selectPickaxe(LocalPlayer player) {
+        Inventory inv = player.getInventory();
+        int held = inv.getSelectedSlot();
+        if (held != TORCH_SLOT && isUsablePickaxe(inv.getItem(held))) {
+            return true;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (i != TORCH_SLOT && isUsablePickaxe(inv.getItem(i))) {
+                inv.setSelectedSlot(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isUsablePickaxe(ItemStack stack) {
+        return stack.is(ItemTags.PICKAXES)
+                && stack.getMaxDamage() - stack.getDamageValue() > MIN_PICKAXE_DURABILITY;
+    }
+
+    private static void tryPlaceTorch(LocalPlayer player, ClientLevel level, MultiPlayerGameMode gameMode) {
+        if (torchCooldown > 0) {
+            return;
+        }
+        Inventory inv = player.getInventory();
+        ItemStack torch = inv.getItem(TORCH_SLOT);
+        if (!torch.is(Items.TORCH) && !torch.is(Items.SOUL_TORCH)) {
+            if (!torchWarned) {
+                torchWarned = true;
+                say("§e[SubMiner] В 4 слоте нет факелов — не ставлю");
+            }
+            return;
+        }
+        torchWarned = false;
+
+        BlockPos feet = player.blockPosition();
+        BlockPos floor = feet.below();
+        if (!player.onGround()
+                || !level.getBlockState(feet).isAir()
+                || level.getBrightness(LightLayer.BLOCK, feet) >= TORCH_LIGHT_BELOW
+                || !level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)) {
+            return;
+        }
+
+        int previous = inv.getSelectedSlot();
+        inv.setSelectedSlot(TORCH_SLOT);
+        Vec3 hitPos = new Vec3(floor.getX() + 0.5, floor.getY() + 1.0, floor.getZ() + 0.5);
+        gameMode.useItemOn(player, InteractionHand.MAIN_HAND, new BlockHitResult(hitPos, Direction.UP, floor, false));
+        player.swing(InteractionHand.MAIN_HAND);
+        inv.setSelectedSlot(previous);
+        torchCooldown = TORCH_COOLDOWN_TICKS;
+    }
+
+    private static void faceBlock(LocalPlayer player, BlockPos pos) {
+        Vec3 d = Vec3.atCenterOf(pos).subtract(player.getEyePosition());
+        double horizontal = Math.sqrt(d.x * d.x + d.z * d.z);
+        player.setYRot((float) (Math.toDegrees(Math.atan2(d.z, d.x)) - 90.0));
+        player.setXRot((float) -Math.toDegrees(Math.atan2(d.y, horizontal)));
+    }
+
+    private static void setWalking(boolean on) {
+        if (walking != on) {
+            walking = on;
+            Minecraft.getInstance().options.keyUp.setDown(on);
+        }
+    }
+
+    private static void setJumping(boolean on) {
+        if (jumping != on) {
+            jumping = on;
+            Minecraft.getInstance().options.keyJump.setDown(on);
+        }
+    }
+
+    private static void say(String text) {
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null) {
+            player.sendSystemMessage(Component.literal(text));
+        }
+    }
+}
