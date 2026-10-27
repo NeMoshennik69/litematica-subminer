@@ -6,7 +6,6 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.resources.Identifier;
-import org.lwjgl.glfw.GLFW;
 
 public class ModInit implements ClientModInitializer {
 
@@ -19,8 +18,7 @@ public class ModInit implements ClientModInitializer {
     public void onInitializeClient() {
         toggleKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.litematicsubminer.toggle",
-                InputConstants.Type.KEYSYM,
-                GLFW.GLFW_KEY_J,
+                InputConstants.KEY_J,
                 CATEGORY
         ));
 
