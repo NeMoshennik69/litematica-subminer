@@ -161,7 +161,7 @@ public final class LitematicaSubterraneanBot {
             Vec3 c = Vec3.atCenterOf(target);
             Direction face = Direction.getApproximateNearest(eye.x - c.x, eye.y - c.y, eye.z - c.z);
             gameMode.continueDestroyBlock(target, face);
-            player.swing(InteractionHand.MAIN_HAND);
+            
             return;
         }
 
@@ -314,7 +314,6 @@ public final class LitematicaSubterraneanBot {
         inv.setSelectedSlot(TORCH_SLOT);
         Vec3 hitPos = new Vec3(floor.getX() + 0.5, floor.getY() + 1.0, floor.getZ() + 0.5);
         gameMode.useItemOn(player, InteractionHand.MAIN_HAND, new BlockHitResult(hitPos, Direction.UP, floor, false));
-        player.swing(InteractionHand.MAIN_HAND);
         inv.setSelectedSlot(previous);
         torchCooldown = TORCH_COOLDOWN_TICKS;
     }
