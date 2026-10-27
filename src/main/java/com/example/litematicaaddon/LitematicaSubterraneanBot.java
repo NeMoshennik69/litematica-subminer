@@ -1,55 +1,32 @@
 package com.example.litematicaaddon;
 
-import java.util.HashSet;
-import java.util.Set;
-
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.network.chat.Component;
-import net.minecraft.tags.ItemTags;
-import net.minecraft.util.Mth;
-import net.minecraft.world.InteractionHand;
-import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
+/**
+ * Этап 1: прокапывается к северному верхнему углу зоны.
+ * Этап 2: чистит зону слоями сверху вниз, змейкой.
+ */
 public final class LitematicaSubterraneanBot {
 
-    // ===================== НАСТРОЙКИ =====================
-    private static final int TORCH_SLOT = 3;
-    private static final int RADIUS = 8;
-    private static final int LAYERS_UP = 3;
-    private static final int LAYERS_DOWN = 0;
-    private static final int TORCH_LIGHT_BELOW = 8;
-    private static final int TORCH_COOLDOWN_TICKS = 20;
     private static final float MIN_HEALTH = 8.0F;
-    private static final int MAX_BREAK_TICKS = 400;
     private static final int MAX_WALK_TICKS = 160;
-    private static final int MIN_PICKAXE_DURABILITY = 10;
-    // =====================================================
+    private static final int MAX_STUCK_TICKS = 200;
+    private static final int MAX_TRAVEL_TICKS = 24000;
 
     private static boolean active;
-    private static BlockPos origin = BlockPos.ZERO;
-    private static int topY;
-    private static int bottomY;
-
-    private static final Set<Long> skipped = new HashSet<>();
-    private static BlockPos target;
-    private static int targetTicks;
+    private static boolean traveling;
+    private static int pickSlot;
     private static int walkTicks;
-    private static int torchCooldown;
-    private static boolean torchWarned;
+    private static int travelTicks;
+    private static int stuckTicks;
+    private static BlockPos lastCell;
     private static float lastHealth;
-    private static boolean walking;
-    private static boolean jumping;
 
     private LitematicaSubterraneanBot() {
     }
@@ -60,29 +37,38 @@ public final class LitematicaSubterraneanBot {
             stop("§c[SubMiner] Выключен");
             return;
         }
-        if (mc.player == null || mc.level == null) {
+        LocalPlayer player = mc.player;
+        ClientLevel level = mc.level;
+        if (player == null || level == null) {
             return;
         }
-        origin = mc.player.blockPosition();
-        topY = origin.getY() + LAYERS_UP;
-        bottomY = Math.max(origin.getY() - LAYERS_DOWN, mc.level.getMinY());
-        skipped.clear();
-        target = null;
-        targetTicks = 0;
+        if (!SubMinerConfig.zoneSet) {
+            Actions.say("§c[SubMiner] Зона не задана. Нажми K и введи координаты двух углов");
+            return;
+        }
+        if (!Zone.init(level.getMinY(), player.getX())) {
+            Actions.say("§c[SubMiner] Зона ниже дна мира, проверь координаты (клавиша K)");
+            return;
+        }
+        pickSlot = SubMinerConfig.pickaxeSlot - 1;
+        Actions.clearTarget();
         walkTicks = 0;
-        torchCooldown = 0;
-        torchWarned = false;
-        lastHealth = mc.player.getHealth();
+        travelTicks = 0;
+        stuckTicks = 0;
+        lastCell = null;
+        lastHealth = player.getHealth();
+        traveling = true;
         active = true;
-        say("§a[SubMiner] Включен. Зона: ±" + RADIUS + " блоков, слои Y " + bottomY + ".." + topY);
+        Actions.say("§a[SubMiner] Включен. Зона X " + Zone.minX + ".." + Zone.maxX
+                + ", Y " + Zone.minY + ".." + Zone.maxY
+                + ", Z " + Zone.minZ + ".." + Zone.maxZ + ". Иду к северному верхнему углу");
     }
 
     private static void stop(String message) {
         active = false;
-        target = null;
-        setWalking(false);
-        setJumping(false);
-        say(message);
+        Actions.clearTarget();
+        Actions.releaseKeys();
+        Actions.say(message);
     }
 
     public static void onTick(Minecraft mc) {
@@ -95,14 +81,12 @@ public final class LitematicaSubterraneanBot {
 
         if (player == null || level == null || gameMode == null) {
             active = false;
-            target = null;
-            setWalking(false);
-            setJumping(false);
+            Actions.clearTarget();
+            Actions.releaseKeys();
             return;
         }
         if (mc.gui.screen() != null) {
-            setWalking(false);
-            setJumping(false);
+            Actions.releaseKeys();
             return;
         }
 
@@ -120,229 +104,174 @@ public final class LitematicaSubterraneanBot {
             stop("§c[SubMiner] Игрок в лаве — остановка");
             return;
         }
-
-        if (torchCooldown > 0) {
-            torchCooldown--;
+        String pickError = Actions.selectPickaxe(player, pickSlot);
+        if (pickError != null) {
+            stop(pickError);
+            return;
         }
-        tryPlaceTorch(player, level, gameMode);
 
-        if (!selectPickaxe(player)) {
-            stop("§c[SubMiner] В хотбаре нет целой кирки (кроме слота факелов)");
+        if (traveling) {
+            travelStep(player, level, gameMode);
+        } else {
+            workStep(player, level, gameMode);
+        }
+    }
+
+    // ===================== Этап 1: путь к углу =====================
+
+    private static void travelStep(LocalPlayer player, ClientLevel level, MultiPlayerGameMode gm) {
+        if (++travelTicks > MAX_TRAVEL_TICKS) {
+            stop("§c[SubMiner] Не дошёл до угла за отведённое время — остановка");
+            return;
+        }
+        BlockPos cur = player.blockPosition();
+        int goalX = Zone.startAtMaxX ? Zone.maxX : Zone.minX;
+        int goalZ = Zone.minZ;
+        int goalY = Zone.maxY > Zone.minY ? Zone.maxY - 1 : Zone.maxY;
+        int dx = goalX - cur.getX();
+        int dz = goalZ - cur.getZ();
+        int dy = goalY - cur.getY();
+
+        if (dx == 0 && dz == 0 && dy == 0) {
+            traveling = false;
+            walkTicks = 0;
+            Actions.clearTarget();
+            Actions.releaseKeys();
+            Actions.say("§a[SubMiner] Дошёл до северного верхнего угла. Начинаю расчистку сверху вниз");
             return;
         }
 
         Vec3 eye = player.getEyePosition();
-        double reach = player.blockInteractionRange() - 0.5;
 
-        if (target != null && !isStillValid(level, target, eye, reach)) {
-            target = null;
-            targetTicks = 0;
-        }
-        if (target == null) {
-            BlockPos candidate = pickTarget(level, eye, reach);
-            if (candidate != null && isUnsafe(level, candidate)) {
-                skipped.add(candidate.asLong());
-                return;
-            }
-            target = candidate;
-            targetTicks = 0;
-        }
-
-        if (target != null) {
-            setWalking(false);
-            setJumping(false);
-            walkTicks = 0;
-            if (++targetTicks > MAX_BREAK_TICKS) {
-                skipped.add(target.asLong());
-                target = null;
-                return;
-            }
-            faceBlock(player, target);
-            Vec3 c = Vec3.atCenterOf(target);
-            Direction face = Direction.getApproximateNearest(eye.x - c.x, eye.y - c.y, eye.z - c.z);
-            gameMode.continueDestroyBlock(target, face);
-            
+        // Нужно только вниз: копаем под собой
+        if (dx == 0 && dz == 0 && dy < 0) {
+            Actions.releaseKeys();
+            ensureClear(player, level, gm, cur.below(), eye);
             return;
         }
 
-        BlockPos far = nearestRemaining(level, eye);
-        if (far == null) {
-            String extra = skipped.isEmpty() ? "" : " (пропущено блоков: " + skipped.size() + ")";
+        int stepX = 0;
+        int stepZ = 0;
+        if (dx != 0 && (dz == 0 || Math.abs(dx) >= Math.abs(dz))) {
+            stepX = Integer.signum(dx);
+        } else if (dz != 0) {
+            stepZ = Integer.signum(dz);
+        } else {
+            stepX = 1; // нужно только вверх: поднимаемся лесенкой на восток
+        }
+        BlockPos next = cur.offset(stepX, 0, stepZ);
+
+        if (dy > 0) {
+            // Лесенка вверх: блок-ступенька (next на текущем уровне) остаётся на месте
+            if (level.getBlockState(next).getCollisionShape(level, next).isEmpty()) {
+                stop("§c[SubMiner] Не могу подняться по лесенке: нет опоры — остановка");
+                return;
+            }
+            if (!ensureClear(player, level, gm, cur.above(2), eye)
+                    || !ensureClear(player, level, gm, next.above(), eye)
+                    || !ensureClear(player, level, gm, next.above(2), eye)) {
+                return;
+            }
+        } else {
+            if (!ensureClear(player, level, gm, next, eye)
+                    || !ensureClear(player, level, gm, next.above(), eye)) {
+                return;
+            }
+        }
+
+        if (cur.equals(lastCell)) {
+            if (++stuckTicks > MAX_STUCK_TICKS) {
+                stop("§c[SubMiner] Застрял по пути к углу — остановка");
+                return;
+            }
+        } else {
+            lastCell = cur;
+            stuckTicks = 0;
+        }
+        Actions.walkToward(player, next.getX() + 0.5, next.getZ() + 0.5, dy > 0);
+    }
+
+    /** true = клетка свободна. false = идёт ломание или бот остановлен. */
+    private static boolean ensureClear(LocalPlayer player, ClientLevel level, MultiPlayerGameMode gm,
+                                       BlockPos pos, Vec3 eye) {
+        BlockState state = level.getBlockState(pos);
+        if (state.isAir()) {
+            return true;
+        }
+        if (!state.getFluidState().isEmpty()) {
+            stop("§c[SubMiner] На пути жидкость — остановка");
+            return false;
+        }
+        if (state.getDestroySpeed(level, pos) < 0.0F) {
+            stop("§c[SubMiner] На пути неразрушимый блок — остановка");
+            return false;
+        }
+        if (state.getCollisionShape(level, pos).isEmpty()) {
+            return true;
+        }
+        if (Zone.isUnsafe(level, pos)) {
+            stop("§c[SubMiner] Рядом с путём жидкость — остановка");
+            return false;
+        }
+        stuckTicks = 0;
+        if (!Actions.mine(player, gm, pos.immutable(), eye)) {
+            stop("§c[SubMiner] Не получается сломать блок на пути — остановка");
+        }
+        return false;
+    }
+
+    // ===================== Этап 2: расчистка зоны =====================
+
+    private static void workStep(LocalPlayer player, ClientLevel level, MultiPlayerGameMode gm) {
+        if (Zone.updateCurLayer(level)) {
+            String extra = Zone.skipped.isEmpty() ? "" : " (пропущено блоков: " + Zone.skipped.size() + ")";
             stop("§6[SubMiner] Готово! Зона очищена" + extra);
             return;
         }
-        Vec3 fc = Vec3.atCenterOf(far);
-        double dx = fc.x - player.getX();
-        double dz = fc.z - player.getZ();
-        if (dx * dx + dz * dz < 0.5 || ++walkTicks > MAX_WALK_TICKS) {
-            skipped.add(far.asLong());
+        int yHi = Zone.curLayer;
+        int yLo = Math.max(Zone.curLayer - 1, Zone.minY);
+        Vec3 eye = player.getEyePosition();
+        double reach = player.blockInteractionRange() - 0.5;
+
+        BlockPos target = Actions.target;
+        if (target != null && (target.getY() < yLo || target.getY() > yHi
+                || !Zone.isStillValid(level, target, eye, reach))) {
+            Actions.clearTarget();
+            target = null;
+        }
+        if (target == null) {
+            BlockPos candidate = Zone.pickTarget(level, eye, reach, yLo, yHi);
+            if (candidate != null) {
+                if (Zone.isUnsafe(level, candidate)) {
+                    Zone.skipped.add(candidate.asLong());
+                    return;
+                }
+                target = candidate;
+            }
+        }
+
+        if (target != null) {
             walkTicks = 0;
-            setWalking(false);
-            setJumping(false);
-            return;
-        }
-        faceBlock(player, far);
-        player.setXRot(0.0F);
-        setWalking(true);
-        setJumping(player.horizontalCollision);
-    }
-
-    private static BlockPos pickTarget(ClientLevel level, Vec3 eye, double reach) {
-        double reachSq = reach * reach;
-        int minX = Math.max(origin.getX() - RADIUS, Mth.floor(eye.x - reach));
-        int maxX = Math.min(origin.getX() + RADIUS, Mth.floor(eye.x + reach));
-        int minZ = Math.max(origin.getZ() - RADIUS, Mth.floor(eye.z - reach));
-        int maxZ = Math.min(origin.getZ() + RADIUS, Mth.floor(eye.z + reach));
-        int yFrom = Math.min(topY, Mth.floor(eye.y + reach));
-        int yTo = Math.max(bottomY, Mth.floor(eye.y - reach));
-
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        for (int y = yFrom; y >= yTo; y--) {
-            BlockPos best = null;
-            double bestDist = Double.MAX_VALUE;
-            for (int x = minX; x <= maxX; x++) {
-                for (int z = minZ; z <= maxZ; z++) {
-                    pos.set(x, y, z);
-                    double d = Vec3.atCenterOf(pos).distanceToSqr(eye);
-                    if (d > reachSq || d >= bestDist) {
-                        continue;
-                    }
-                    if (!isMineable(level, pos) || skipped.contains(pos.asLong())) {
-                        continue;
-                    }
-                    best = pos.immutable();
-                    bestDist = d;
-                }
-            }
-            if (best != null) {
-                return best;
-            }
-        }
-        return null;
-    }
-
-    private static BlockPos nearestRemaining(ClientLevel level, Vec3 eye) {
-        BlockPos best = null;
-        double bestDist = Double.MAX_VALUE;
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        for (int y = topY; y >= bottomY; y--) {
-            for (int x = origin.getX() - RADIUS; x <= origin.getX() + RADIUS; x++) {
-                for (int z = origin.getZ() - RADIUS; z <= origin.getZ() + RADIUS; z++) {
-                    pos.set(x, y, z);
-                    double d = Vec3.atCenterOf(pos).distanceToSqr(eye);
-                    if (d >= bestDist) {
-                        continue;
-                    }
-                    if (!isMineable(level, pos) || skipped.contains(pos.asLong())) {
-                        continue;
-                    }
-                    best = pos.immutable();
-                    bestDist = d;
-                }
-            }
-        }
-        return best;
-    }
-
-    private static boolean isStillValid(ClientLevel level, BlockPos pos, Vec3 eye, double reach) {
-        return isMineable(level, pos)
-                && !skipped.contains(pos.asLong())
-                && Vec3.atCenterOf(pos).distanceToSqr(eye) <= reach * reach;
-    }
-
-    private static boolean isMineable(ClientLevel level, BlockPos pos) {
-        BlockState state = level.getBlockState(pos);
-        return !state.isAir()
-                && state.getFluidState().isEmpty()
-                && state.getDestroySpeed(level, pos) >= 0.0F;
-    }
-
-    private static boolean isUnsafe(ClientLevel level, BlockPos pos) {
-        for (Direction dir : Direction.values()) {
-            if (!level.getFluidState(pos.relative(dir)).isEmpty()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean selectPickaxe(LocalPlayer player) {
-        Inventory inv = player.getInventory();
-        int held = inv.getSelectedSlot();
-        if (held != TORCH_SLOT && isUsablePickaxe(inv.getItem(held))) {
-            return true;
-        }
-        for (int i = 0; i < 9; i++) {
-            if (i != TORCH_SLOT && isUsablePickaxe(inv.getItem(i))) {
-                inv.setSelectedSlot(i);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean isUsablePickaxe(ItemStack stack) {
-        return stack.is(ItemTags.PICKAXES)
-                && stack.getMaxDamage() - stack.getDamageValue() > MIN_PICKAXE_DURABILITY;
-    }
-
-    private static void tryPlaceTorch(LocalPlayer player, ClientLevel level, MultiPlayerGameMode gameMode) {
-        if (torchCooldown > 0) {
-            return;
-        }
-        Inventory inv = player.getInventory();
-        ItemStack torch = inv.getItem(TORCH_SLOT);
-        if (!torch.is(Items.TORCH) && !torch.is(Items.SOUL_TORCH)) {
-            if (!torchWarned) {
-                torchWarned = true;
-                say("§e[SubMiner] В 4 слоте нет факелов — не ставлю");
+            if (!Actions.mine(player, gm, target, eye)) {
+                Zone.skipped.add(target.asLong());
+                Actions.clearTarget();
             }
             return;
         }
-        torchWarned = false;
 
-        BlockPos feet = player.blockPosition();
-        BlockPos floor = feet.below();
-        if (!player.onGround()
-                || !level.getBlockState(feet).isAir()
-                || level.getBrightness(LightLayer.BLOCK, feet) >= TORCH_LIGHT_BELOW
-                || !level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)) {
+        // В досягаемости ничего нет: идём к следующей клетке по змейке
+        BlockPos cell = Zone.frontierCell(level, yLo, yHi);
+        if (cell == null) {
             return;
         }
-
-        int previous = inv.getSelectedSlot();
-        inv.setSelectedSlot(TORCH_SLOT);
-        Vec3 hitPos = new Vec3(floor.getX() + 0.5, floor.getY() + 1.0, floor.getZ() + 0.5);
-        gameMode.useItemOn(player, InteractionHand.MAIN_HAND, new BlockHitResult(hitPos, Direction.UP, floor, false));
-        inv.setSelectedSlot(previous);
-        torchCooldown = TORCH_COOLDOWN_TICKS;
-    }
-
-    private static void faceBlock(LocalPlayer player, BlockPos pos) {
-        Vec3 d = Vec3.atCenterOf(pos).subtract(player.getEyePosition());
-        double horizontal = Math.sqrt(d.x * d.x + d.z * d.z);
-        player.setYRot((float) (Math.toDegrees(Math.atan2(d.z, d.x)) - 90.0));
-        player.setXRot((float) -Math.toDegrees(Math.atan2(d.y, horizontal)));
-    }
-
-    private static void setWalking(boolean on) {
-        if (walking != on) {
-            walking = on;
-            Minecraft.getInstance().options.keyUp.setDown(on);
+        double dx = cell.getX() + 0.5 - player.getX();
+        double dz = cell.getZ() + 0.5 - player.getZ();
+        if (dx * dx + dz * dz < 0.5 || ++walkTicks > MAX_WALK_TICKS) {
+            Zone.skipCell(cell, yLo, yHi);
+            walkTicks = 0;
+            Actions.releaseKeys();
+            return;
         }
-    }
-
-    private static void setJumping(boolean on) {
-        if (jumping != on) {
-            jumping = on;
-            Minecraft.getInstance().options.keyJump.setDown(on);
-        }
-    }
-
-    private static void say(String text) {
-        LocalPlayer player = Minecraft.getInstance().player;
-        if (player != null) {
-            player.sendSystemMessage(Component.literal(text));
-        }
+        Actions.walkToward(player, cell.getX() + 0.5, cell.getZ() + 0.5, false);
     }
 }
