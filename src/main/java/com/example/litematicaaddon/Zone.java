@@ -1,12 +1,16 @@
 package com.example.litematicaaddon;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
@@ -26,6 +30,10 @@ final class Zone {
     static int retries;
     static final Set<Long> skipped = new HashSet<>();
 
+    private static final Set<String> ignoredIds = new HashSet<>();
+    private static final Map<Block, Boolean> ignoreCache = new HashMap<>();
+    private static final Set<Block> autoIgnored = new HashSet<>();
+
     private Zone() {
     }
 
@@ -42,9 +50,31 @@ final class Zone {
         }
         startAtMaxX = Math.abs(playerX - (maxX + 0.5)) < Math.abs(playerX - (minX + 0.5));
         skipped.clear();
+        ignoredIds.clear();
+        ignoredIds.addAll(SubMinerConfig.cleanedFrom(SubMinerConfig.ignored));
+        ignoreCache.clear();
+        autoIgnored.clear();
         curLayer = maxY;
         retries = 0;
         return true;
+    }
+
+    /** Блок в списке игнорируемых (из меню или поставленный самим ботом). */
+    static boolean isIgnored(Block block) {
+        if (autoIgnored.contains(block)) {
+            return true;
+        }
+        Boolean cached = ignoreCache.get(block);
+        if (cached == null) {
+            cached = ignoredIds.contains(BuiltInRegistries.BLOCK.getKey(block).toString());
+            ignoreCache.put(block, cached);
+        }
+        return cached;
+    }
+
+    /** Запоминает блок, который поставил бот, чтобы не ломать его обратно. */
+    static void addAutoIgnored(Block block) {
+        autoIgnored.add(block);
     }
 
     /** Обновляет верхний непустой слой. true = зона полностью очищена. */
@@ -160,12 +190,13 @@ final class Zone {
                 && Vec3.atCenterOf(pos).distanceToSqr(eye) <= reach * reach;
     }
 
-    /** Не воздух, не жидкость, не бедрок/барьер. */
+    /** Не воздух, не жидкость, не бедрок/барьер и не игнорируемый блок. */
     static boolean isMineable(ClientLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         return !state.isAir()
                 && state.getFluidState().isEmpty()
-                && state.getDestroySpeed(level, pos) >= 0.0F;
+                && state.getDestroySpeed(level, pos) >= 0.0F
+                && !isIgnored(state.getBlock());
     }
 
     /** Рядом с блоком (6 сторон) есть вода/лава: ломать опасно. */
