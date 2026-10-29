@@ -1,9 +1,14 @@
 {
   "schemaVersion": 1,
   "id": "litematica-subterranean-miner",
-  "name": "Litematica Subterranean Miner",
+  "name": "SubMiner",
   "version": "${version}",
-  "description": "Автоматически расчищает зону под землёй и ставит факелы из 4 слота.",
+  "description": "Client-side mod that clears a user-defined underground zone layer by layer in a snake pattern. Press K for settings, J to start/stop.",
+  "authors": [ "NeMoshennik69" ],
+  "license": "MIT",
+  "contact": {
+    "sources": "https://github.com/NeMoshennik69/litematica-subminer"
+  },
   "environment": "client",
   "entrypoints": {
     "client": [ "com.example.litematicaaddon.ModInit" ]
@@ -13,8 +18,5 @@
     "minecraft": "~26.3",
     "java": ">=25",
     "fabric-api": "*"
-  },
-  "suggests": {
-    "litematica": "*"
   }
 }
