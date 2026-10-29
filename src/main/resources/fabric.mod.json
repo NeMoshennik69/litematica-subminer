@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "litematica-subterranean-miner",
-  "name": "SubMiner",
+  "name": "AutoMiner",
   "version": "${version}",
   "description": "Client-side mod that clears a user-defined underground zone layer by layer in a snake pattern. Press K for settings, J to start/stop.",
   "authors": [ "NeMoshennik69" ],
   "license": "MIT",
+  "icon": "assets/litematica-subterranean-miner/icon.png",
   "contact": {
     "sources": "https://github.com/NeMoshennik69/litematica-subminer"
   },
