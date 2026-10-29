@@ -114,7 +114,8 @@ final class Actions {
     static void say(String text) {
         LocalPlayer player = Minecraft.getInstance().player;
         if (player != null) {
-            player.sendSystemMessage(Component.literal(text));
+            // Во всех сообщениях бота префикс заменяется на актуальное название мода
+            player.sendSystemMessage(Component.literal(text.replace("[SubMiner]", "[AutoMiner]")));
         }
     }
 }
