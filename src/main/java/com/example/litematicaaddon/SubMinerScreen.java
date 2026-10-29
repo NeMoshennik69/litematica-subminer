@@ -7,7 +7,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 
-/** Меню настроек: координаты двух углов зоны и слот кирки. */
+/** Вкладка «Зона»: координаты двух углов и слот кирки. */
 public class SubMinerScreen extends Screen {
 
     private final Screen parent;
@@ -16,18 +16,25 @@ public class SubMinerScreen extends Screen {
     private String error = "";
 
     public SubMinerScreen(Screen parent) {
-        super(Component.literal("SubMiner: настройки"));
+        super(Component.literal("SubMiner"));
         this.parent = parent;
     }
 
     @Override
     protected void init() {
         int left = this.width / 2 - 108;
+
+        Button zoneTab = Button.builder(Component.literal("Зона"), btn -> { })
+                .bounds(left, 6, 106, 20).build();
+        zoneTab.active = false;
+        this.addRenderableWidget(zoneTab);
+        this.addRenderableWidget(Button.builder(Component.literal("Блоки"), btn -> openBlocks())
+                .bounds(left + 110, 6, 106, 20).build());
+
         int[] values = {
                 SubMinerConfig.x1, SubMinerConfig.y1, SubMinerConfig.z1,
                 SubMinerConfig.x2, SubMinerConfig.y2, SubMinerConfig.z2
         };
-
         for (int i = 0; i < 6; i++) {
             int col = i % 3;
             int row = i / 3;
@@ -64,7 +71,8 @@ public class SubMinerScreen extends Screen {
         coords[firstIndex + 2].setValue(Integer.toString(pos.getZ()));
     }
 
-    private void save() {
+    /** Проверяет поля и записывает в настройки. false = ошибка в полях. */
+    private boolean apply() {
         int[] v = new int[6];
         int slot;
         try {
@@ -74,12 +82,17 @@ public class SubMinerScreen extends Screen {
             slot = Integer.parseInt(slotBox.getValue().trim());
         } catch (NumberFormatException e) {
             error = "Нужны целые числа (координаты и слот)";
-            return;
+            return false;
         }
         if (slot < 0 || slot > 9) {
             error = "Слот кирки: число от 1 до 9 (0 = авто)";
-            return;
+            return false;
         }
+        if (slot != 0 && slot == SubMinerConfig.placeSlot) {
+            error = "Слот кирки совпадает со слотом блока";
+            return false;
+        }
+        error = "";
         SubMinerConfig.x1 = v[0];
         SubMinerConfig.y1 = v[1];
         SubMinerConfig.z1 = v[2];
@@ -87,9 +100,25 @@ public class SubMinerScreen extends Screen {
         SubMinerConfig.y2 = v[4];
         SubMinerConfig.z2 = v[5];
         SubMinerConfig.pickaxeSlot = slot;
-        SubMinerConfig.zoneSet = true;
+        boolean anyNonZero = false;
+        for (int value : v) {
+            anyNonZero |= value != 0;
+        }
+        SubMinerConfig.zoneSet = anyNonZero;
         SubMinerConfig.save();
-        this.onClose();
+        return true;
+    }
+
+    private void save() {
+        if (apply()) {
+            this.onClose();
+        }
+    }
+
+    private void openBlocks() {
+        if (apply()) {
+            this.minecraft.gui.setScreen(new SubMinerBlocksScreen(this.parent));
+        }
     }
 
     @Override
@@ -101,7 +130,6 @@ public class SubMinerScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
         int left = this.width / 2 - 108;
-        graphics.text(this.font, "SubMiner: настройки", left, 14, 0xFFFFFFFF, true);
         graphics.text(this.font, "Угол 1: X   Y   Z", left, 32, 0xFFAAAAAA, true);
         graphics.text(this.font, "Угол 2: X   Y   Z", left, 96, 0xFFAAAAAA, true);
         graphics.text(this.font, "Слот кирки (1-9, 0 = авто)", left, 160, 0xFFAAAAAA, true);
