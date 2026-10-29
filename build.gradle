@@ -2,11 +2,11 @@ plugins {
     id 'net.fabricmc.fabric-loom' version '1.15-SNAPSHOT'
 }
 
-version = '1.0.0'
+version = '1.1.0'
 group = 'com.example.litematicaaddon'
 
 base {
-    archivesName = 'litematica-subminer'
+    archivesName = 'subminer'
 }
 
 dependencies {
