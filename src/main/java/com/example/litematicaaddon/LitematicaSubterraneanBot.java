@@ -1,10 +1,16 @@
 package com.example.litematicaaddon;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
@@ -15,7 +21,7 @@ import net.minecraft.world.phys.Vec3;
 public final class LitematicaSubterraneanBot {
 
     private static final float MIN_HEALTH = 8.0F;
-    private static final int MAX_WALK_TICKS = 160;
+    private static final int MAX_WALK_TICKS = 240;
     private static final int MAX_STUCK_TICKS = 200;
     private static final int MAX_TRAVEL_TICKS = 24000;
 
@@ -27,6 +33,7 @@ public final class LitematicaSubterraneanBot {
     private static int stuckTicks;
     private static BlockPos lastCell;
     private static float lastHealth;
+    private static final Set<Long> travelVisited = new HashSet<>();
 
     private LitematicaSubterraneanBot() {
     }
@@ -50,7 +57,14 @@ public final class LitematicaSubterraneanBot {
             Actions.say("§c[SubMiner] Зона ниже дна мира, проверь координаты (клавиша K)");
             return;
         }
+        if (SubMinerConfig.placeSlot != 0 && SubMinerConfig.placeSlot == SubMinerConfig.pickaxeSlot) {
+            Actions.say("§c[SubMiner] Слот блока совпадает со слотом кирки (клавиша K)");
+            return;
+        }
         pickSlot = SubMinerConfig.pickaxeSlot - 1;
+        Placer.reset();
+        Pathing.reset();
+        travelVisited.clear();
         Actions.clearTarget();
         walkTicks = 0;
         travelTicks = 0;
@@ -110,6 +124,8 @@ public final class LitematicaSubterraneanBot {
             return;
         }
 
+        Placer.tick(player, level, gameMode);
+
         if (traveling) {
             travelStep(player, level, gameMode);
         } else {
@@ -143,23 +159,33 @@ public final class LitematicaSubterraneanBot {
 
         Vec3 eye = player.getEyePosition();
 
-        // Нужно только вниз: копаем под собой
+        // Нужно только вниз: копаем под собой, но не над пустотой глубже 1 блока
         if (dx == 0 && dz == 0 && dy < 0) {
             Actions.releaseKeys();
-            ensureClear(player, level, gm, cur.below(), eye);
+            BlockPos below = cur.below();
+            if (!level.getBlockState(below).isAir()
+                    && !Pathing.solid(level, below.getX(), below.getY() - 1, below.getZ())) {
+                stop("§c[SubMiner] Под полом пустота глубже 1 блока — не копаю вниз, остановка");
+                return;
+            }
+            ensureClear(player, level, gm, below, eye);
             return;
         }
 
-        int stepX = 0;
-        int stepZ = 0;
-        if (dx != 0 && (dz == 0 || Math.abs(dx) >= Math.abs(dz))) {
-            stepX = Integer.signum(dx);
-        } else if (dz != 0) {
-            stepZ = Integer.signum(dz);
-        } else {
-            stepX = 1; // нужно только вверх: поднимаемся лесенкой на восток
+        // Выбираем шаг: к цели, а ямы глубиной 2+ блока и уже пройденные клетки обходим
+        travelVisited.add(cur.asLong());
+        BlockPos next = null;
+        for (Direction dir : candidateDirs(dx, dz)) {
+            BlockPos candidate = cur.relative(dir);
+            if (dy > 0 || (!Pathing.isPit(level, candidate) && !travelVisited.contains(candidate.asLong()))) {
+                next = candidate;
+                break;
+            }
         }
-        BlockPos next = cur.offset(stepX, 0, stepZ);
+        if (next == null) {
+            stop("§c[SubMiner] Не нашёл безопасный путь к углу (яма) — остановка");
+            return;
+        }
 
         if (dy > 0) {
             // Лесенка вверх: блок-ступенька (next на текущем уровне) остаётся на месте
@@ -191,12 +217,47 @@ public final class LitematicaSubterraneanBot {
         Actions.walkToward(player, next.getX() + 0.5, next.getZ() + 0.5, dy > 0);
     }
 
+    /** Порядок направлений: сначала к цели, потом в обход. */
+    private static List<Direction> candidateDirs(int dx, int dz) {
+        Direction primary;
+        Direction secondary = null;
+        if (dx == 0 && dz == 0) {
+            primary = Direction.EAST; // нужно только вверх: поднимаемся лесенкой на восток
+        } else if (dx != 0 && (dz == 0 || Math.abs(dx) >= Math.abs(dz))) {
+            primary = dx > 0 ? Direction.EAST : Direction.WEST;
+            if (dz != 0) {
+                secondary = dz > 0 ? Direction.SOUTH : Direction.NORTH;
+            }
+        } else {
+            primary = dz > 0 ? Direction.SOUTH : Direction.NORTH;
+            if (dx != 0) {
+                secondary = dx > 0 ? Direction.EAST : Direction.WEST;
+            }
+        }
+        List<Direction> list = new ArrayList<>();
+        list.add(primary);
+        if (secondary != null) {
+            list.add(secondary);
+        }
+        list.add(primary.getClockWise());
+        list.add(primary.getCounterClockWise());
+        list.add(primary.getOpposite());
+        return list;
+    }
+
     /** true = клетка свободна. false = идёт ломание или бот остановлен. */
     private static boolean ensureClear(LocalPlayer player, ClientLevel level, MultiPlayerGameMode gm,
                                        BlockPos pos, Vec3 eye) {
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) {
             return true;
+        }
+        if (Zone.isIgnored(state.getBlock())) {
+            if (state.getCollisionShape(level, pos).isEmpty()) {
+                return true;
+            }
+            stop("§c[SubMiner] На пути игнорируемый блок — остановка");
+            return false;
         }
         if (!state.getFluidState().isEmpty()) {
             stop("§c[SubMiner] На пути жидкость — остановка");
@@ -264,14 +325,15 @@ public final class LitematicaSubterraneanBot {
         if (cell == null) {
             return;
         }
-        double dx = cell.getX() + 0.5 - player.getX();
-        double dz = cell.getZ() + 0.5 - player.getZ();
-        if (dx * dx + dz * dz < 0.5 || ++walkTicks > MAX_WALK_TICKS) {
+        BlockPos here = player.blockPosition();
+        BlockPos way = Pathing.nextWaypoint(level, here, cell);
+        if (way == null || ++walkTicks > MAX_WALK_TICKS) {
             Zone.skipCell(cell, yLo, yHi);
             walkTicks = 0;
+            Pathing.reset();
             Actions.releaseKeys();
             return;
         }
-        Actions.walkToward(player, cell.getX() + 0.5, cell.getZ() + 0.5, false);
+        Actions.walkToward(player, way.getX() + 0.5, way.getZ() + 0.5, way.getY() > here.getY());
     }
 }
