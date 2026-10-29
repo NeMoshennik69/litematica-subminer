@@ -1,5 +1,5 @@
 {
-  "key.litematicsubminer.toggle": "Toggle SubMiner",
-  "key.litematicsubminer.menu": "SubMiner settings",
-  "key.category.litematica-subterranean-miner.main": "SubMiner"
+  "key.litematicsubminer.toggle": "Toggle AutoMiner",
+  "key.litematicsubminer.menu": "AutoMiner settings",
+  "key.category.litematica-subterranean-miner.main": "AutoMiner"
 }
